@@ -13,7 +13,9 @@ from detectron2.modeling.postprocessing import sem_seg_postprocess
 from detectron2.structures import ImageList
 
 from .modeling.criterion import SetCriterion
+from .modeling.criterion_semi import SetCriterion_Semi
 from .modeling.matcher import HungarianMatcher
+from mask_former.modeling import criterion_semi
 
 
 @META_ARCH_REGISTRY.register()
@@ -104,14 +106,22 @@ class MaskFormer(nn.Module):
             weight_dict.update(aux_weight_dict)
 
         losses = ["labels", "masks"]
-
-        criterion = SetCriterion(
-            sem_seg_head.num_classes,
-            matcher=matcher,
-            weight_dict=weight_dict,
-            eos_coef=no_object_weight,
-            losses=losses,
-        )
+        if cfg.INPUT.DATASET_MAPPER_NAME == "semi_semantic":
+            criterion = SetCriterion_Semi(
+                sem_seg_head.num_classes,
+                matcher=matcher,
+                weight_dict=weight_dict,
+                eos_coef=no_object_weight,
+                losses=losses,
+            )
+        else:
+            criterion = SetCriterion(
+                sem_seg_head.num_classes,
+                matcher=matcher,
+                weight_dict=weight_dict,
+                eos_coef=no_object_weight,
+                losses=losses,
+            )
 
         return {
             "backbone": backbone,
@@ -190,6 +200,30 @@ class MaskFormer(nn.Module):
         else:
             mask_cls_results = outputs["pred_logits"]
             mask_pred_results = outputs["pred_masks"]
+            
+            """
+            cls_results = F.max_pool2d(mask_cls_results, kernel_size = (100, 1))
+            cls_results = cls_results.squeeze()
+
+            tgt_cls_gt = np.unique(batched_inputs[0]["sem_seg"])
+            tgt_cls_gt = tgt_cls_gt[tgt_cls_gt != 255]
+            tgt_cls_gt = F.one_hot(torch.tensor(tgt_cls_gt), num_classes = 21)
+            tgt_cls_gt = tgt_cls_gt.sum(dim = 0)
+            tgt_cls_gt = tgt_cls_gt.squeeze()
+
+            with open("results.txt", "a+") as f:
+                con = ""
+                for t in cls_results[:-1].cpu().numpy().tolist():
+                    con = con + ("%f " % t)
+                f.write(con + "\n")                    
+            
+            with open("results_gt.txt", "a+") as f:
+                con = ""
+                for t in tgt_cls_gt.numpy():
+                    con = con + ("%d " % t)
+                f.write(con + "\n")   
+            """
+            
             # upsample masks
             mask_pred_results = F.interpolate(
                 mask_pred_results,

@@ -37,10 +37,11 @@ from mask_former import (
     DETRPanopticDatasetMapper,
     MaskFormerPanopticDatasetMapper,
     MaskFormerSemanticDatasetMapper,
+    MaskFormerSemiDatasetMapper,
     SemanticSegmentorWithTTA,
     add_mask_former_config,
+    build_detection_train_loader_semi,
 )
-
 
 class Trainer(DefaultTrainer):
     """
@@ -112,6 +113,9 @@ class Trainer(DefaultTrainer):
         # DETR-style dataset mapper for COCO panoptic segmentation
         elif cfg.INPUT.DATASET_MAPPER_NAME == "detr_panoptic":
             mapper = DETRPanopticDatasetMapper(cfg, True)
+        elif cfg.INPUT.DATASET_MAPPER_NAME == "semi_semantic":
+            mapper = MaskFormerSemiDatasetMapper(cfg, True)
+            return build_detection_train_loader_semi(cfg, mapper=mapper)
         else:
             mapper = None
         return build_detection_train_loader(cfg, mapper=mapper)

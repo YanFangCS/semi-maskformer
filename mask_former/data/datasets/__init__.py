@@ -5,4 +5,5 @@ from . import (
     register_coco_stuff_10k,
     register_mapillary_vistas,
     register_voc_aug,
+    register_voc_semi,
 )
