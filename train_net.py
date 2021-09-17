@@ -10,6 +10,7 @@ import logging
 import os
 from collections import OrderedDict
 from typing import Any, Dict, List, Set
+from fvcore.nn.precise_bn import get_bn_modules
 
 import torch
 
@@ -17,7 +18,7 @@ import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import get_cfg
 from detectron2.data import MetadataCatalog, build_detection_train_loader
-from detectron2.engine import DefaultTrainer, default_argument_parser, default_setup, launch
+from detectron2.engine import hooks, DefaultTrainer, default_argument_parser, default_setup, launch
 from detectron2.evaluation import (
     CityscapesInstanceEvaluator,
     CityscapesSemSegEvaluator,
@@ -123,6 +124,49 @@ class Trainer(DefaultTrainer):
         """
         return build_lr_scheduler(cfg, optimizer)
 
+    def build_hooks(self):
+        cfg = self.cfg.clone()
+        cfg.defrost()
+        cfg.DATALOADER.NUM_WORKERS = 0
+
+        ret = [
+            hooks.IterationTimer(),
+            hooks.LRScheduler(),
+            hooks.PreciseBN(
+                cfg.TEST.EVAL_PERIOD,
+                self.model,
+                self.build_train_loader(cfg),
+                cfg.TEST.PRECISE_BN.NUM_ITER,
+            )
+            if cfg.TEST.PRECISE_BN.ENABLED and get_bn_modules(self.model)
+            else None,
+        ] 
+        self.best_score = 10.0
+        #only use BestCheckpointer
+        if comm.is_main_process():
+            ret.append(hooks.PeriodicCheckpointer(self.checkpointer, cfg.SOLVER.CHECKPOINT_PERIOD, cfg.SOLVER.MAX_ITER, 20))
+
+        def test_and_save_results():
+            if comm.is_main_process():
+                last_eval_mIoU = self._last_eval_results["sem_seg"]["mIoU"] if hasattr(self, "_last_eval_results") else 0.0
+            self._last_eval_results = self.test(self.cfg, self.model)
+            print(self._last_eval_results)
+            # if current evaluation performs better than last evaluation, save checkpointer
+            if comm.is_main_process():
+                if (self.iter > self.cfg.TEST.EVAL_PERIOD and 
+                    self._last_eval_results["sem_seg"]["mIoU"] > self.best_score):
+                    self.best_score = self._last_eval_results["sem_seg"]["mIoU"]
+                    print("best model has been saved in model_best.pth， iterations {}".format(self.iter))
+                    self.checkpointer.save("model_best")
+            return self._last_eval_results
+        
+        ret.append(hooks.EvalHook(cfg.TEST.EVAL_PERIOD, test_and_save_results))            
+
+        if comm.is_main_process():
+            #ret.append(BestCheckpointer(self.checkpointer, cfg.TEST.EVAL_PERIOD, cfg.SOLVER.MAX_ITER, 1, "model"))
+            ret.append(hooks.PeriodicWriter(super().build_writers(), period=50))
+        return ret 
+    
     @classmethod
     def build_optimizer(cls, cfg, model):
         weight_decay_norm = cfg.SOLVER.WEIGHT_DECAY_NORM
