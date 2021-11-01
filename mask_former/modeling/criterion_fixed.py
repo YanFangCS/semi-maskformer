@@ -126,9 +126,9 @@ class SetCriterion_Fixed(nn.Module):
         target_classes_unlabel = target_classes[labeled_size:]
         
 
-        loss_ce = F.cross_entropy(src_logits_labeled.transpose(1,2), target_classes_labeled, self.empty_weight) + 0.1 * (
-                F.cross_entropy(src_logits_unlabel.transpose(1,2) , target_classes_unlabel, self.empty_weight))
-        # loss_ce = F.cross_entropy(src_logits.transpose(1,2), target_classes, self.empty_weight)
+        # loss_ce = F.cross_entropy(src_logits_labeled.transpose(1,2), target_classes_labeled, self.empty_weight) + 0.1 * (
+        #         F.cross_entropy(src_logits_unlabel.transpose(1,2) , target_classes_unlabel, self.empty_weight))
+        loss_ce = F.cross_entropy(src_logits.transpose(1,2), target_classes, self.empty_weight)
 
         # loss_ce = 1.0 * F.cross_entropy(src_logits_labeled.transpose(1, 2), target_classes_labeled, self.empty_weight) + 0.1 * (
         #           F.cross_entropy(src_logits_unlabel.transpose(1, 2), target_classes_unlabel, self.empty_weight) )
