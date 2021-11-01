@@ -8,6 +8,7 @@ def add_mask_former_config(cfg):
     Add config for MASK_FORMER.
     """
     # data config
+    cfg.DATASETS.SEMI_SPLIT_RATIO = 1.0
     # select the dataset mapper
     cfg.INPUT.DATASET_MAPPER_NAME = "mask_former_semantic"
     # Color augmentation
@@ -25,12 +26,17 @@ def add_mask_former_config(cfg):
     cfg.SOLVER.OPTIMIZER = "ADAMW"
     cfg.SOLVER.BACKBONE_MULTIPLIER = 0.1
 
+    # semi-setting 
+    cfg.SOLVER.UNLABELED_RATIO = 0.0
+
     # mask_former model config
     cfg.MODEL.MASK_FORMER = CN()
 
     # loss
     cfg.MODEL.MASK_FORMER.DEEP_SUPERVISION = True
+    cfg.MODEL.MASK_FORMER.FIXED_MATCHING = False
     cfg.MODEL.MASK_FORMER.NO_OBJECT_WEIGHT = 0.1
+    cfg.MODEL.MASK_FORMER.CE_WEIGHT = 1.0
     cfg.MODEL.MASK_FORMER.DICE_WEIGHT = 1.0
     cfg.MODEL.MASK_FORMER.MASK_WEIGHT = 20.0
 

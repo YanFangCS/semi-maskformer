@@ -67,7 +67,7 @@ class SetCriterion_Semi(nn.Module):
         2) we supervise each pair of matched ground-truth / prediction (supervise class and box)
     """
 
-    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses):
+    def __init__(self, num_classes, matcher, weight_dict, eos_coef, losses, unlabeled_ratio):
         """Create the criterion.
         Parameters:
             num_classes: number of object categories, omitting the special no-object category
@@ -82,8 +82,8 @@ class SetCriterion_Semi(nn.Module):
         self.weight_dict = weight_dict
         self.eos_coef = eos_coef
         self.losses = losses
+        self.unlabeled_ratio = unlabeled_ratio
         empty_weight = torch.ones(self.num_classes + 1)
-        empty_weight[0] = 0.0
         empty_weight[-1] = self.eos_coef
         self.register_buffer("empty_weight", empty_weight)
 
@@ -94,16 +94,26 @@ class SetCriterion_Semi(nn.Module):
         assert "pred_logits" in outputs
         src_logits = outputs["pred_logits"]
 
-        """use maxpooling instead of bipart matching"""
-        src_logits = F.max_pool2d(src_logits, kernel_size = (100, 1))
-    
-        src_logits = src_logits.squeeze() # [4, 22]
+        idx = self._get_src_permutation_idx(indices)
+        target_classes_o = torch.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        target_classes = torch.full(
+            src_logits.shape[:2], self.num_classes, dtype=torch.int64, device=src_logits.device
+        )
+        target_classes[idx] = target_classes_o
 
-        gt_classes = torch.as_tensor([F.one_hot(t["labels"], num_classes = 22).sum(dim=0).tolist() for t in targets])
-        gt_classes = gt_classes.to(dtype=torch.float, device=src_logits.device)
+        batch_size = len(targets)
+        unlabled_size = int(batch_size * self.unlabeled_ratio)
+        labeled_size = batch_size - unlabled_size
+        # labeled_size = int(batch_size / 2)
 
-        loss_ce = F.binary_cross_entropy_with_logits(src_logits, gt_classes, self.empty_weight)
-        losses = {"loss_ce": loss_ce}
+        src_logits_labeled = src_logits[:labeled_size]
+        src_logits_unlable = src_logits[labeled_size:]
+        target_classes_labeled = target_classes[:labeled_size]
+        target_classes_unlabel = target_classes[labeled_size:]
+
+        loss_ce = F.cross_entropy(src_logits.transpose(1,2), target_classes, self.empty_weight)
+        # loss_ce = F.cross_entropy(src_logits_labeled.transpose(1,2), target_classes_labeled, self.empty_weight)
+        losses = {"loss_ce":loss_ce} 
         return losses
     
     """
@@ -134,10 +144,11 @@ class SetCriterion_Semi(nn.Module):
 
         src_idx = self._get_src_permutation_idx(indices)
         tgt_idx = self._get_tgt_permutation_idx(indices)
-
-        batch_size = len(outputs)
-        labeled_size = int(batch_size / 2)
         
+        batch_size = len(targets)
+        unlabeled_size = int(batch_size * self.unlabeled_ratio)
+        labeled_size = batch_size - unlabeled_size
+
         src_idx1, src_idx2 = [], []
         for i, p in zip(src_idx[0], src_idx[1]):
             if i < labeled_size:
@@ -151,13 +162,11 @@ class SetCriterion_Semi(nn.Module):
                 tgt_idx1.append(i.item())
                 tgt_idx2.append(p.item())
         tgt_idx = (torch.tensor(tgt_idx1), torch.tensor(tgt_idx2))
-
+        
         src_masks = outputs["pred_masks"] 
         src_masks = src_masks[src_idx] 
         masks = [t["masks"] for t in targets]
 
-        #src_masks = src_masks[:2]
-        #masks = masks[:2]
         # in target_masks,the gt_masks of weakly supervisied image are all 255
         # in each batch, the last half images are weakly supervisied image
 
@@ -213,8 +222,9 @@ class SetCriterion_Semi(nn.Module):
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != "aux_outputs"}
 
-        batch_size = len(outputs)
-        labeled_size = int(batch_size / 2)
+        batch_size = len(targets)
+        unlabeled_size = int(self.unlabeled_ratio * batch_size)
+        labeled_size = batch_size - unlabeled_size
 
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets)

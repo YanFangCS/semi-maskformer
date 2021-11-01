@@ -2,6 +2,7 @@
 from typing import Tuple
 
 import torch
+import numpy as np
 from torch import nn
 from torch.nn import functional as F
 
@@ -11,11 +12,13 @@ from detectron2.modeling import META_ARCH_REGISTRY, build_backbone, build_sem_se
 from detectron2.modeling.backbone import Backbone
 from detectron2.modeling.postprocessing import sem_seg_postprocess
 from detectron2.structures import ImageList
+from detectron2.utils import comm
 
 from .modeling.criterion import SetCriterion
 from .modeling.criterion_semi import SetCriterion_Semi
+from .modeling.criterion_fixed import SetCriterion_Fixed
 from .modeling.matcher import HungarianMatcher
-from mask_former.modeling import criterion_semi
+from .modeling.matcher_semi import HungarianMatcher_Semi
 
 
 @META_ARCH_REGISTRY.register()
@@ -87,17 +90,28 @@ class MaskFormer(nn.Module):
         # Loss parameters:
         deep_supervision = cfg.MODEL.MASK_FORMER.DEEP_SUPERVISION
         no_object_weight = cfg.MODEL.MASK_FORMER.NO_OBJECT_WEIGHT
+        ce_weight = cfg.MODEL.MASK_FORMER.CE_WEIGHT
         dice_weight = cfg.MODEL.MASK_FORMER.DICE_WEIGHT
         mask_weight = cfg.MODEL.MASK_FORMER.MASK_WEIGHT
+        fixed_matching = cfg.MODEL.MASK_FORMER.FIXED_MATCHING
+        unlabeled_batch = cfg.SOLVER.UNLABELED_RATIO
 
         # building criterion
-        matcher = HungarianMatcher(
-            cost_class=1,
-            cost_mask=mask_weight,
-            cost_dice=dice_weight,
-        )
+        if cfg.INPUT.DATASET_MAPPER_NAME == "semi_semantic":
+            matcher = HungarianMatcher_Semi(
+                cost_class=1,
+                cost_mask=mask_weight,
+                cost_dice=dice_weight,
+                unlabeled_ratio=unlabeled_batch,
+            )
+        else:
+            matcher = HungarianMatcher(
+                cost_class=1,
+                cost_mask=mask_weight,
+                cost_dice=dice_weight,
+            )
 
-        weight_dict = {"loss_ce": 1, "loss_mask": mask_weight, "loss_dice": dice_weight}
+        weight_dict = {"loss_ce": ce_weight, "loss_mask": mask_weight, "loss_dice": dice_weight}
         if deep_supervision:
             dec_layers = cfg.MODEL.MASK_FORMER.DEC_LAYERS
             aux_weight_dict = {}
@@ -106,6 +120,7 @@ class MaskFormer(nn.Module):
             weight_dict.update(aux_weight_dict)
 
         losses = ["labels", "masks"]
+        
         if cfg.INPUT.DATASET_MAPPER_NAME == "semi_semantic":
             criterion = SetCriterion_Semi(
                 sem_seg_head.num_classes,
@@ -113,14 +128,25 @@ class MaskFormer(nn.Module):
                 weight_dict=weight_dict,
                 eos_coef=no_object_weight,
                 losses=losses,
+                unlabeled_ratio=unlabeled_batch,
             )
-        else:
+        else:      
             criterion = SetCriterion(
                 sem_seg_head.num_classes,
                 matcher=matcher,
                 weight_dict=weight_dict,
                 eos_coef=no_object_weight,
                 losses=losses,
+            )
+        
+        if fixed_matching:
+            criterion = SetCriterion_Fixed(
+                sem_seg_head.num_classes,
+                matcher = matcher,
+                weight_dict = weight_dict,
+                eos_coef = no_object_weight, 
+                losses = losses,
+                unlabeled_ratio=unlabeled_batch,
             )
 
         return {
@@ -174,19 +200,24 @@ class MaskFormer(nn.Module):
         images = [x["image"].to(self.device) for x in batched_inputs]
         images = [(x - self.pixel_mean) / self.pixel_std for x in images]
         images = ImageList.from_tensors(images, self.size_divisibility)
-
+        
         features = self.backbone(images.tensor)
         outputs = self.sem_seg_head(features)
 
         if self.training:
-            # mask classification target
             if "instances" in batched_inputs[0]:
+                # filenames = [x["file_name"].split("/")[-1] for x in batched_inputs]
                 gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
                 targets = self.prepare_targets(gt_instances, images)
             else:
                 targets = None
 
-            # bipartite matching-based loss
+            # if comm.is_main_process():
+            # with open("data_processing.txt", "a") as f:
+            #     for t,fn in zip(targets, filenames):
+            #         mask = t["masks"].cpu().numpy()
+            #         print("file: {}, mask: {}".format(fn, np.unique(mask)), file=f)
+
             losses = self.criterion(outputs, targets)
 
             for k in list(losses.keys()):
@@ -201,28 +232,27 @@ class MaskFormer(nn.Module):
             mask_cls_results = outputs["pred_logits"]
             mask_pred_results = outputs["pred_masks"]
             
-            """
-            cls_results = F.max_pool2d(mask_cls_results, kernel_size = (100, 1))
-            cls_results = cls_results.squeeze()
+            # cls_results = F.max_pool2d(mask_cls_results, kernel_size = (self.num_queries, 1))
+            # cls_results = cls_results.squeeze()
 
-            tgt_cls_gt = np.unique(batched_inputs[0]["sem_seg"])
-            tgt_cls_gt = tgt_cls_gt[tgt_cls_gt != 255]
-            tgt_cls_gt = F.one_hot(torch.tensor(tgt_cls_gt), num_classes = 21)
-            tgt_cls_gt = tgt_cls_gt.sum(dim = 0)
-            tgt_cls_gt = tgt_cls_gt.squeeze()
+            # tgt_cls_gt = np.unique(batched_inputs[0]["sem_seg"])
+            # tgt_cls_gt = tgt_cls_gt[tgt_cls_gt != 255]
+            # tgt_cls_gt = F.one_hot(torch.tensor(tgt_cls_gt), num_classes = 21).sum(dim = 0).squeeze()
 
-            with open("results.txt", "a+") as f:
-                con = ""
-                for t in cls_results[:-1].cpu().numpy().tolist():
-                    con = con + ("%f " % t)
-                f.write(con + "\n")                    
+            # with open("filenames.txt", "a+") as f:
+            #     f.write(batched_inputs[0]["file_name"] + "\n")
+
+            # with open("results.txt", "a+") as f:
+            #     con = ""
+            #     for t in cls_results[:-1].cpu().numpy().tolist():
+            #         con = con + ("%f " % t)
+            #     f.write(con + "\n")                    
             
-            with open("results_gt.txt", "a+") as f:
-                con = ""
-                for t in tgt_cls_gt.numpy():
-                    con = con + ("%d " % t)
-                f.write(con + "\n")   
-            """
+            # with open("results_gt.txt", "a+") as f:
+            #     con = ""
+            #     for t in tgt_cls_gt.numpy():
+            #         con = con + ("%d " % t)
+            #     f.write(con + "\n")   
             
             # upsample masks
             mask_pred_results = F.interpolate(
@@ -253,7 +283,7 @@ class MaskFormer(nn.Module):
                 # panoptic segmentation inference
                 if self.panoptic_on:
                     panoptic_r = self.panoptic_inference(mask_cls_result, mask_pred_result)
-                    processed_results[-1]["panoptic_seg"] = panoptic_r
+                    processed_results[-1]["panoptic_seg"] = panoptic_r 
 
             return processed_results
 
@@ -272,6 +302,34 @@ class MaskFormer(nn.Module):
                 }
             )
         return new_targets
+
+    """
+    def _get_src_permutation_idx(self, indices):
+        batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
+        src_idx = torch.cat([src for (src, _) in indices])
+        return batch_idx, src_idx
+
+    def _get_tgt_permutation_idx(self, indices):
+        batch_idx = torch.cat([torch.full(tgt, i) for i, (_, tgt) in enumerate(indices)])
+        tgt_idx = torch.cat([tgt for (_, tgt) in indices])
+        return batch_idx, tgt_idx
+
+    def semantic_bm_inference(self, outputs, targets):
+        output_with_aux = {k : v for k, v in outputs.items() if k != "aux_outputs"}
+        indices = self.matcher(output_with_aux, targets)
+
+        src_idx = self._get_src_permutation_idx(indices)
+        tgt_idx = self._get_tgt_permutation_idx(indices)
+
+        src_masks = outputs["pred_masks"]
+        src_masks = src_masks[src_idx]
+        
+        src_logits = outputs["pred_logits"]
+        src_logits = src_logits[src_idx]
+
+        return self.semantic_inference(src_logits, src_masks)
+    """
+
 
     def semantic_inference(self, mask_cls, mask_pred):
         mask_cls = F.softmax(mask_cls, dim=-1)[..., :-1]

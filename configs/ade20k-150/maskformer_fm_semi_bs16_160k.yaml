@@ -1,0 +1,15 @@
+_BASE_: maskformer_R50_bs16_160k.yaml
+DATASETS:
+  TRAIN: ("ade20k_2526_sem_seg_train","ade20k_weakly_sem_seg_train")
+  TEST: ("ade20k_sem_seg_val",)
+MODEL:
+  MASK_FORMER:
+    FIXED_MATCHING: True
+    NUM_OBJECT_QUERIES: 150
+INPUT:
+  DATASET_MAPPER_NAME: "semi_semantic"
+SOLVER:
+  MAX_ITER: 160000
+  IMS_PER_BATCH: 16
+  UNLABELED_RATIO: 0.5
+  

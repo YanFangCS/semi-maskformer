@@ -1,0 +1,7 @@
+_BASE_: maskformer_R101_bs16_60k.yaml
+DATASETS:
+  TEST: ('coco2017_train_sem_seg',)
+MODEL:
+  MASK_FORMER:
+    FIXED_MATCHING: True 
+    NUM_OBJECT_QUERIES: 21

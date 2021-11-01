@@ -14,8 +14,8 @@ MODEL:
     NORM: "SyncBN"
     RES5_MULTI_GRID: [1, 1, 1]
 DATASETS:
-  TRAIN: ("voc_semi_train_sem_seg",)
-  TEST: ("voc_semi_test_sem_seg",)
+  TRAIN: ("voc2012_train_sem_seg","voc_weakly_train_sem_seg")
+  TEST: ("voc2012_test_sem_seg",)
 SOLVER:
   IMS_PER_BATCH: 16
   BASE_LR: 0.0001
@@ -57,5 +57,5 @@ TEST:
     MAX_SIZE: 1024
     FLIP: True
 DATALOADER:
-  NUM_WORKERS: 4
+  NUM_WORKERS: 2
 VERSION: 2

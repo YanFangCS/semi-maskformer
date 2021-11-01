@@ -1,0 +1,6 @@
+_BASE_: maskformer_fixed.yaml
+DATASETS:
+  TEST: ("voc_weakly_train_sem_seg",)
+TEST:
+  AUG:
+    ENABLED: False
